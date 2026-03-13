@@ -9,7 +9,6 @@ async function start(){
 
  const page = await browser.newPage();
 
- // COOKIE QO‘SHISH
  await page.setCookie(
  {
   name:"user_session",
@@ -41,7 +40,7 @@ async function start(){
 
   try{
 
-   console.log("Litepick ochilmoqda...");
+   console.log("Litepick sahifasi ochilmoqda...");
 
    await page.goto("https://litepick.io/faucet.php",{waitUntil:"networkidle2"});
 
