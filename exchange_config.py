@@ -4,7 +4,6 @@ CURRENCIES = [
     {"id": "humo",        "name": "HUMO",           "icon": "💎", "type": "card"},
     {"id": "usdt_trc20",  "name": "USDT (Trc20)",   "icon": "💎", "type": "crypto"},
     {"id": "usdt_bep20",  "name": "USDT (Bep20)",   "icon": "💎", "type": "crypto"},
-    {"id": "binance_p2p", "name": "Binance P2P",    "icon": "💎", "type": "crypto"},
     {"id": "tron",        "name": "Tron (TRX)",     "icon": "💎", "type": "crypto"},
     {"id": "sui",         "name": "Sui (SUI)",      "icon": "💎", "type": "crypto"},
     {"id": "bnb",         "name": "Bnb (BNB)",      "icon": "💎", "type": "crypto"},
