@@ -1,1221 +1,786 @@
-import logging
-from aiogram import Router, F, Bot
+import asyncio
+import json
+import os
+import shutil
+from datetime import datetime
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
 from aiogram.types import (
-    Message, CallbackQuery,
-    InlineKeyboardMarkup, InlineKeyboardButton,
-    ReplyKeyboardMarkup, KeyboardButton
+    ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton,
+    CallbackQuery, Message
 )
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.filters import Command
-from datetime import datetime
+from aiogram.fsm.storage.memory import MemoryStorage
 
-from config import ADMIN_IDS
-from database import load_db, save_db, get_all_users, get_channels, add_channel, remove_channel
-from exchange_config import CURRENCIES, DEFAULT_RATES, get_currency_by_id
-from referral_service import (
-    award_referral_bonus_for_order,
-    format_money,
-    get_referral_settings,
-    ensure_user_referral_fields,
-    admin_adjust_referral_bonus,
-    get_pending_withdrawals,
-    get_withdraw_request,
-    approve_withdraw_request,
-    reject_withdraw_request,
+# ============ KONFIG ============
+TOKEN = "8017480371:AAELsrLtoA3ONP-8XTQxNJe5mmpvYZ-mxNU"
+ADMIN_ID = 5912710631
+
+bot = Bot(token=TOKEN)
+storage = MemoryStorage()
+dp = Dispatcher(storage=storage)
+
+# ============ FAYL OPERATSIYALARI ============
+def read_file(path):
+    if not path:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except:
+        return None
+
+def write_file(path, content):
+    if not path:
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(str(content))
+
+def file_exists(path):
+    return os.path.exists(path) if path else False
+
+def delete_folder(path):
+    if os.path.exists(path):
+        shutil.rmtree(path)
+
+# ============ PAPKALAR VA DEFAULT FAYLLAR ============
+folders = ["ban", "step", "tizim", "tizim/hamyon", "tizim/hamyon/raqam", f"tizim/hamyon/raqam/{ADMIN_ID}", "tizim/kurs", "odam", "tugma", "obmen"]
+for f in folders:
+    os.makedirs(f, exist_ok=True)
+
+default_files = {
+    "tugma/key1.txt": "🔄 Valyuta ayirboshlash",
+    "tugma/key2.txt": "🔰 Hamyonlar",
+    "tugma/key3.txt": "📊 Valyuta kursi",
+    "tugma/key4.txt": "📞 Aloqa",
+    "tugma/key5.txt": "🔁 Almashuvlar",
+    "tizim/user.txt": "Kiritilmagan",
+    "tizim/promo.txt": "Kiritilmagan",
+    "tizim/uslug.txt": "20",
+    "tizim/valyuta.txt": "so'm",
+    "tizim/holat.txt": "✅",
+    "tizim/support.txt": "Bot 08:00 dan 00:00 gacha ishlaydi",
+    "obmen/obmen.txt": "0",
+    "tizim/kurs/sotish_rub.txt": "140.00",
+    "tizim/kurs/sotish_usd.txt": "12800.00",
+    "tizim/kurs/sotib_rub.txt": "135.00",
+    "tizim/kurs/sotib_usd.txt": "12700.00"
+}
+for f, c in default_files.items():
+    if not file_exists(f):
+        write_file(f, c)
+
+# ============ VALYUTALAR ============
+wallets = ["uzcard", "humo", "qiwi_rub", "qiwi_usd", "payeer_rub", "payeer_usd", "wmz_rub", "sberbank_rub", "tinkoff_rub"]
+for w in wallets:
+    path = f"tizim/hamyon/{ADMIN_ID}/{w}.txt"
+    if not file_exists(path):
+        write_file(path, "kiritilmagan")
+
+# ============ MENULAR ============
+key1 = read_file("tugma/key1.txt") or "🔄 Valyuta ayirboshlash"
+key2 = read_file("tugma/key2.txt") or "🔰 Hamyonlar"
+key3 = read_file("tugma/key3.txt") or "📊 Valyuta kursi"
+key4 = read_file("tugma/key4.txt") or "📞 Aloqa"
+key5 = read_file("tugma/key5.txt") or "🔁 Almashuvlar"
+
+menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text=key1)],
+        [KeyboardButton(text=key2), KeyboardButton(text=key3)],
+        [KeyboardButton(text=key4), KeyboardButton(text=key5)]
+    ],
+    resize_keyboard=True
 )
 
-log = logging.getLogger(__name__)
-admin_config_router = Router()
-API_RATE_CURS = CURRENCIES
+admin_menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text=key1)],
+        [KeyboardButton(text=key2), KeyboardButton(text=key3)],
+        [KeyboardButton(text=key4), KeyboardButton(text=key5)],
+        [KeyboardButton(text="🗄 Boshqarish")]
+    ],
+    resize_keyboard=True
+)
 
-class ACS(StatesGroup):
-    api_edit_val  = State()
-    man_to        = State()
-    man_rate      = State()
-    man_min       = State()
-    man_max       = State()
-    man_comm      = State()
-    man_field_val = State()
-    card_val      = State()
-    ch_id         = State()
-    ch_link       = State()
-    ch_name       = State()
-    ch_del        = State()
-    broadcast     = State()
-    ref_set_val   = State()
-    ref_uid       = State()
-    ref_amount    = State()
+back = ReplyKeyboardMarkup(
+    keyboard=[[KeyboardButton(text="◀️ Orqaga")]],
+    resize_keyboard=True
+)
 
+admin_panel = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="⚙ Asosiy sozlamalar")],
+        [KeyboardButton(text="📊 Statistika"), KeyboardButton(text="✉ Xabar yuborish")],
+        [KeyboardButton(text="🔎 Foydalanuvchini boshqarish")],
+        [KeyboardButton(text="🎛 Tugmalar"), KeyboardButton(text="🔄 Almashuv holati")],
+        [KeyboardButton(text="◀️ Orqaga")]
+    ],
+    resize_keyboard=True
+)
 
+asosiy = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="*️⃣ Birlamchi sozlamalar")],
+        [KeyboardButton(text="📢 Kanallar"), KeyboardButton(text="🗄 Boshqarish")]
+    ],
+    resize_keyboard=True
+)
 
-def is_admin(uid): return uid in ADMIN_IDS
+boshqarish = ReplyKeyboardMarkup(
+    keyboard=[[KeyboardButton(text="🗄 Boshqarish")]],
+    resize_keyboard=True
+)
 
-def get_settings():
-    return load_db().get("rate_settings", {})
+# ============ QO'SHIMCHA FUNKSIYALAR ============
+def get_valyuta():
+    return read_file("tizim/valyuta.txt") or "so'm"
 
-def save_settings(s):
-    db = load_db(); db["rate_settings"] = s; save_db(db)
+def get_foiz():
+    return float(read_file("tizim/uslug.txt") or 20)
 
-def get_cards():
-    return load_db().get("payment_cards", {
-        "uzcard": "8600 1666 0393 7029",
-        "humo":   "9860 0000 0000 0000"
-    })
+def get_status():
+    return read_file("tizim/holat.txt") or "✅"
 
-def save_cards(c):
-    db = load_db(); db["payment_cards"] = c; save_db(db)
+def get_support():
+    return read_file("tizim/support.txt") or "Aloqa"
 
-def get_manual():
-    return load_db().get("manual_rates", {})
+def get_promo():
+    return read_file("tizim/promo.txt") or ""
 
-def save_manual(r):
-    db = load_db(); db["manual_rates"] = r; save_db(db)
+def get_kurs():
+    return {
+        "sotish_rub": float(read_file("tizim/kurs/sotish_rub.txt") or 140),
+        "sotish_usd": float(read_file("tizim/kurs/sotish_usd.txt") or 12800),
+        "sotib_rub": float(read_file("tizim/kurs/sotib_rub.txt") or 135),
+        "sotib_usd": float(read_file("tizim/kurs/sotib_usd.txt") or 12700)
+    }
 
-def get_orders():
-    return load_db().get("orders", {})
+def save_user(chat_id):
+    if not file_exists("azo.dat"):
+        write_file("azo.dat", "")
+    data = read_file("azo.dat") or ""
+    if str(chat_id) not in data:
+        with open("azo.dat", "a", encoding="utf-8") as f:
+            f.write(f"{chat_id}\n")
 
-def set_order_status(oid, status):
-    db = load_db()
-    order = db.get("orders", {}).get(str(oid))
-    if not order:
-        return None
-    order["status"] = status
-    order["updated_at"] = datetime.now().strftime("%d.%m.%Y %H:%M")
-    save_db(db)
-    return order
+def is_banned(chat_id):
+    return file_exists(f"ban/{chat_id}.txt")
 
-def get_transaction_channel_id():
-    db = load_db()
-    configured = db.get("transaction_channel_id")
-    if configured is not None:
+async def joinchat(chat_id):
+    kanal = read_file("tizim/kanal.txt")
+    if not kanal:
+        return True
+    lines = kanal.split("\n")
+    uns = False
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[])
+    for line in lines:
+        if "-" not in line:
+            continue
+        name, url = line.split("-")
         try:
-            return int(configured)
-        except Exception:
-            pass
-    channels = db.get("channels", [])
-    if channels:
-        try:
-            return int(channels[0].get("channel_id"))
-        except Exception:
-            return channels[0].get("channel_id")
-    return None
+            member = await bot.get_chat_member(chat_id=f"@{url}", user_id=chat_id)
+            status = member.status
+            if status in ["creator", "administrator", "member"]:
+                keyboard.inline_keyboard.append([InlineKeyboardButton(text=f"✅ {name}", url=f"https://t.me/{url}")])
+            else:
+                keyboard.inline_keyboard.append([InlineKeyboardButton(text=f"❌ {name}", url=f"https://t.me/{url}")])
+                uns = True
+        except:
+            keyboard.inline_keyboard.append([InlineKeyboardButton(text=f"❌ {name}", url=f"https://t.me/{url}")])
+            uns = True
+    keyboard.inline_keyboard.append([InlineKeyboardButton(text="🔄 Tekshirish", callback_data="check_sub")])
+    if uns:
+        await bot.send_message(chat_id, "⚠️ <b>Botdan foydalanish uchun kanallarga obuna bo'ling:</b>",
+                               parse_mode="HTML", reply_markup=keyboard)
+        return False
+    return True
 
-def cname(cid):
-    c = get_currency_by_id(cid)
-    return c["name"] if c else cid
+def create_exchange(chat_id, from_w, to_w, amount, valyuta, foiz):
+    idlar = int(read_file("obmen/obmen.txt") or 0)
+    ex_id = idlar + 1
+    write_file("obmen/obmen.txt", str(ex_id))
+    os.makedirs(f"obmen/{ex_id}", exist_ok=True)
+    komissiya = amount * foiz / 100
+    jami = amount - komissiya
+    write_file(f"obmen/{ex_id}/id.txt", str(ex_id))
+    write_file(f"obmen/{ex_id}/egasi.txt", str(chat_id))
+    write_file(f"obmen/{ex_id}/holat.txt", "♻️ Bajarilmoqda")
+    write_file(f"obmen/{ex_id}/miqdor.txt", str(jami))
+    write_file(f"obmen/{ex_id}/sana.txt", datetime.now().strftime("%d.%m.%Y"))
+    write_file(f"obmen/{ex_id}/vaqt.txt", datetime.now().strftime("%H:%M"))
+    write_file(f"obmen/{ex_id}/valyuta.txt", f"{from_w} > {to_w}")
+    write_file(f"obmen/{chat_id}/miqdor.txt", str(amount))
+    write_file(f"obmen/{chat_id}/fozimiqdor.txt", str(jami))
+    write_file(f"obmen/{chat_id}/obid.txt", str(ex_id))
+    return ex_id, jami, komissiya
 
-def fmt(v):
-    try:
-        if isinstance(v, float) and v != int(v):
-            return f"{v:.6f}".rstrip("0").rstrip(".")
-        return f"{int(v):,}"
-    except:
-        return str(v)
+# ============ FSM HOLATLAR ============
+class Form(StatesGroup):
+    add_wallet = State()
+    exchange_amount = State()
+    search_id = State()
+    contact = State()
+    broadcast = State()
+    find_user = State()
+    edit_key = State()
+    set_kurs = State()
+    set_valyuta = State()
+    set_foiz = State()
+    set_support = State()
+    set_admin_wallet = State()
+    add_channel = State()
+    set_promo = State()
 
-def build_channel_transaction_text(order: dict, bot_title: str, bot_username: str) -> str:
-    recv_amount = order.get("recv_amount", order.get("receive_amount", 0))
-    ts = order.get("updated_at") or order.get("created_at", "—")
-    return (
-        f"{bot_title} [ BOT ]\n"
-        f"Obmen orqali bot - {bot_username}\n"
-        f"ID: {order.get('order_id', '—')}\n"
-        f"👤 :{order.get('full_name', '—')}\n"
-        f"🔁 :{order.get('from_name', '—')}➡️{order.get('to_name', '—')}\n"
-        f"🕐 Status:✅\n"
-        f"📝 :{ts}\n"
-        f"💱 :{fmt(recv_amount)} {order.get('to_name', '')}"
-    )
-
-
-async def send_transaction_to_channel(bot: Bot, order: dict):
-    channel_id = get_transaction_channel_id()
-    if not channel_id:
+# ============ HANDLERLAR ============
+@dp.message(Command("start"))
+async def start(message: Message, state: FSMContext):
+    chat_id = message.chat.id
+    if is_banned(chat_id):
         return
-    bot_title = "Exchange"
-    bot_username = "@bot"
-    try:
-        me = await bot.get_me()
-        bot_title = me.full_name or me.first_name or bot_title
-        if me.username:
-            bot_username = f"@{me.username}"
-    except Exception:
-        pass
-    text = build_channel_transaction_text(order, bot_title, bot_username)
-    try:
-        await bot.send_message(channel_id, text)
-    except Exception as e:
-        log.warning(f"Channel send xato: {e}")
-
-
-async def safe_edit_admin_message(cb: CallbackQuery, text: str):
-    try:
-        await cb.message.edit_text(text)
+    if not await joinchat(chat_id):
         return
-    except Exception:
-        pass
-    try:
-        await cb.message.edit_caption(caption=text)
-        return
-    except Exception:
-        pass
-    try:
-        await cb.message.answer(text)
-    except Exception:
-        pass
-
-
-def ref_admin_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⚙️ Sozlamalar", callback_data="REFADM_SETTINGS")],
-        [InlineKeyboardButton(text="➕ Bonus qo'shish", callback_data="REFADM_ADD")],
-        [InlineKeyboardButton(text="➖ Bonus ayirish", callback_data="REFADM_SUB")],
-        [InlineKeyboardButton(text="📋 Kutilayotgan yechishlar", callback_data="REFADM_PENDING")],
-        [InlineKeyboardButton(text="🔙 Orqaga", callback_data="REFADM_BACK")],
-    ])
-
-
-def ref_settings_kb() -> InlineKeyboardMarkup:
-    s = get_referral_settings()
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text=f"🎁 Buyurtma uchun bonus: {format_money(s.get('bonus_per_completed_order', 0))} so'm",
-            callback_data="REFSET_bonus_per_completed_order",
-        )],
-        [InlineKeyboardButton(
-            text=f"💸 Min yechish: {format_money(s.get('min_withdraw', 0))} so'm",
-            callback_data="REFSET_min_withdraw",
-        )],
-        [InlineKeyboardButton(text="🔙 Orqaga", callback_data="REFADM_HOME")],
-    ])
-
-
-def pending_withdraw_kb(items: list[dict]) -> InlineKeyboardMarkup:
-    rows = []
-    for req in items[:15]:
-        rows.append([InlineKeyboardButton(
-            text=f"#{req.get('id')} | {req.get('user_id')} | {format_money(req.get('amount', 0))} so'm",
-            callback_data=f"REFWD_VIEW_{req.get('id')}",
-        )])
-    rows.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data="REFADM_HOME")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def ref_withdraw_action_kb(req_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"REFWD_OK_{req_id}")],
-        [InlineKeyboardButton(text="❌ Bekor qilish", callback_data=f"REFWD_NO_{req_id}")],
-        [InlineKeyboardButton(text="🔙 Orqaga", callback_data="REFADM_PENDING")],
-    ])
-
-
-def referral_stats_text() -> str:
-    db = load_db()
-    users = db.get("users", {})
-    total_bonus = 0.0
-    total_pending = 0.0
-    referrals = 0
-    changed = False
-    for u in users.values():
-        if ensure_user_referral_fields(u):
-            changed = True
-        try:
-            total_bonus += float(u.get("referral_bonus", 0.0))
-            total_pending += float(u.get("referral_pending", 0.0))
-            if u.get("referred_by"):
-                referrals += 1
-        except Exception:
-            pass
-    if changed:
-        save_db(db)
-    pending_count = len([w for w in db.get("referral_withdrawals", {}).values() if w.get("status") == "pending"])
-    return (
-        "🎁 Referral bonus boshqaruvi\n\n"
-        f"👥 Userlar: {len(users)}\n"
-        f"🔗 Ulangan referallar: {referrals}\n"
-        f"💼 Bonus balanslar jami: {format_money(total_bonus)} so'm\n"
-        f"⏳ Pending yechish jami: {format_money(total_pending)} so'm\n"
-        f"📋 Pending so'rovlar: {pending_count}"
-    )
-
-
-def adjust_mode_title(mode: str) -> str:
-    return "qo'shish" if mode == "add" else "ayirish"
-
-def admin_kb():
-    return ReplyKeyboardMarkup(keyboard=[
-        [KeyboardButton(text="⚙️ API foizlar"),      KeyboardButton(text="💹 Manual kurslar")],
-        [KeyboardButton(text="💳 To'lov kartalari"),  KeyboardButton(text="📦 Buyurtmalar")],
-        [KeyboardButton(text="📢 Kanallar"),          KeyboardButton(text="👥 Foydalanuvchilar")],
-        [KeyboardButton(text="📨 Broadcast"),         KeyboardButton(text="🔄 Kursni yangilash")],
-        [KeyboardButton(text="🎁 Referral bonus")],
-        [KeyboardButton(text="🔙 Orqaga")],
-    ], resize_keyboard=True)
-
-def xkb():
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="❌ Bekor")]],
-        resize_keyboard=True
-    )
-
-FIELD_HINTS = {
-    "sell_markup": ("📈 Sotish foizi (%)",       "User SO'M beradi → kripto oladi.\nFoiz OSHIRILADI (user ko'proq to'laydi).\nMasalan: 3.5"),
-    "buy_markup":  ("📉 Sotib olish foizi (%)",  "User KRIPTO beradi → so'm oladi.\nFoiz KAMAYTIRILADI (user kamroq so'm oladi).\nMasalan: 3.5"),
-    "commission":  ("💸 Komissiya (%)",           "Almashuv komissiyasi.\nMasalan: 1.0"),
-    "min":         ("⬇️ Minimal miqdor",          "Masalan: 100000"),
-    "max":         ("⬆️ Maksimal miqdor",          "Masalan: 500000000"),
-}
-
-
-
-#  /admin
-
-@admin_config_router.message(Command("admin"))
-async def admin_enter(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
+    save_user(chat_id)
     await state.clear()
-    db   = load_db()
-    live = db.get("live_rates", {})
-    last = db.get("last_rate_update", "Yangilanmagan")
-    await message.answer(
-        f"👨‍💼 Admin panel\n\n"
-        f"📊 Live kurslar: {len(live)} ta\n"
-        f"🕐 Oxirgi yangilanish: {last}",
-        reply_markup=admin_kb()
-    )
-
-
-
-#  ⚙️ API FOIZLAR
-
-def api_list_kb():
-    rows = [[InlineKeyboardButton(
-        text=f"💎 {cur['name']}",
-        callback_data=f"AF_{cur['id']}"   # AF_ prefix — boshqa hech narsa bilan conflict yo'q
-    )] for cur in API_RATE_CURS]
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-def api_detail_kb(cid):
-    s    = get_settings()
-    db   = load_db()
-    live = db.get("live_rates", {}).get(cid, {})
-    cur  = get_currency_by_id(cid)
-    is_card = bool(cur and cur.get("type") == "card")
-    sell_m = s.get(f"{cid}_sell_markup", 0.0)
-    buy_m  = s.get(f"{cid}_buy_markup",  0.0)
-    comm   = s.get(f"{cid}_commission",  1.0)
-    mn     = s.get(f"{cid}_min", 10000 if is_card else 1)
-    mx     = s.get(f"{cid}_max", 500_000_000 if is_card else 100_000)
-    sell_r = live.get("sell_rate", "—")
-    buy_r  = live.get("buy_rate",  "—")
-    s_str  = f"{sell_r:,}" if isinstance(sell_r, int) else str(sell_r)
-    b_str  = f"{buy_r:,}"  if isinstance(buy_r,  int) else str(buy_r)
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"📈 Sotish foizi: {sell_m}%  → {s_str} so'm", callback_data=f"AFE_{cid}__sell_markup")],
-        [InlineKeyboardButton(text=f"📉 Sotib olish foizi: {buy_m}%  → {b_str} so'm", callback_data=f"AFE_{cid}__buy_markup")],
-        [InlineKeyboardButton(text=f"💸 Komissiya: {comm}%",    callback_data=f"AFE_{cid}__commission")],
-        [InlineKeyboardButton(text=f"⬇️ Minimal: {fmt(mn)}",   callback_data=f"AFE_{cid}__min")],
-        [InlineKeyboardButton(text=f"⬆️ Maksimal: {fmt(mx)}",  callback_data=f"AFE_{cid}__max")],
-        [InlineKeyboardButton(text="🔙 Orqaga",                 callback_data="AF_BACK")],
-    ])
-
-
-@admin_config_router.message(F.text == "⚙️ API foizlar")
-async def admin_api(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
-    await state.clear()
-    await message.answer(
-        "⚙️ Qaysi valyutani sozlamoqchisiz?\n\n"
-        "📈 Sotish foizi — user so'm beradi, kripto qimmatroq chiqadi\n"
-        "📉 Sotib olish foizi — user kripto beradi, so'm kamroq beriladi\n"
-        "💳 UZCARD/HUMO uchun ham foiz, komissiya, min/max qo'yish mumkin.",
-        reply_markup=api_list_kb()
-    )
-
-@admin_config_router.callback_query(F.data == "AF_BACK")
-async def af_back(cb: CallbackQuery, state: FSMContext):
-    if not is_admin(cb.from_user.id): return
-    await state.clear()
-    await cb.message.edit_text("⚙️ Qaysi valyutani sozlamoqchisiz?", reply_markup=api_list_kb())
-    await cb.answer()
-
-@admin_config_router.callback_query(F.data.startswith("AF_"))
-async def af_detail(cb: CallbackQuery, state: FSMContext):
-    if not is_admin(cb.from_user.id): return
-    # AF_BACK yuqorida ushlandi, bu yerga faqat AF_{cid} keladi
-    cid = cb.data[3:]
-    cur = get_currency_by_id(cid)
-    if not cur:
-        await cb.answer("❌ Topilmadi", show_alert=True); return
-    db   = load_db()
-    live = db.get("live_rates", {}).get(cid, {})
-    if live:
-        text = (
-            f"💎 {cur['name']} sozlamalari\n\n"
-            f"🌐 API narxi: ${live.get('usd_price','—')}\n"
-            f"💵 USD/UZS: {live.get('usd_uzs','—'):,.0f}\n"
-            f"📊 Xom kurs: {live.get('raw_uzs','—'):,} SO'M\n"
-            f"📈 Sotish kursi: {live.get('sell_rate','—'):,} SO'M\n"
-            f"📉 Sotib olish kursi: {live.get('buy_rate','—'):,} SO'M\n\n"
-            f"Nimani o'zgartirmoqchisiz?"
-        )
-    elif cur and cur.get("type") == "card":
-        text = (
-            f"💎 {cur['name']} sozlamalari\n\n"
-            f"💳 Karta valyutasi uchun live API kurs bo'lmaydi.\n"
-            f"Lekin foiz, komissiya, minimal va maksimal limitlar ishlaydi.\n\n"
-            f"Nimani o'zgartirmoqchisiz?"
-        )
+    if chat_id == ADMIN_ID:
+        await message.answer(f"💎 <b>Salom! @{message.from_user.username} ga xush kelibsiz!</b>",
+                             parse_mode="HTML", reply_markup=admin_menu)
     else:
-        text = (
-            f"💎 {cur['name']} sozlamalari\n\n"
-            f"⚠️ Live kurs yo'q. '🔄 Kursni yangilash' ni bosing.\n\n"
-            f"Nimani o'zgartirmoqchisiz?"
-        )
-    await cb.message.edit_text(text, reply_markup=api_detail_kb(cid))
-    await cb.answer()
+        await message.answer("💎 <b>Salom! Valyuta ayirboshlash botiga xush kelibsiz!</b>",
+                             parse_mode="HTML", reply_markup=menu)
 
-@admin_config_router.callback_query(F.data.startswith("AFE_"))
-async def af_edit(cb: CallbackQuery, state: FSMContext):
-    if not is_admin(cb.from_user.id): return
-    # AFE_{cid}__{field}  — __ ikki pastki chiziq ajratuvchi
-    raw   = cb.data[4:]
-    parts = raw.split("__", 1)
-    cid, field = parts[0], parts[1]
-    cur   = get_currency_by_id(cid)
-    s     = get_settings()
-    cur_v = s.get(f"{cid}_{field}", "0")
-    label, hint = FIELD_HINTS.get(field, (field, ""))
-    await state.set_state(ACS.api_edit_val)
-    await state.update_data(edit_cid=cid, edit_field=field)
-    await cb.message.edit_text(
-        f"💎 {cur['name'] if cur else cid} — {label}\n\n"
-        f"Hozirgi qiymat: {cur_v}\n\n"
-        f"{hint}\n\n"
-        f"Yangi qiymat kiriting:"
-    )
-    await cb.answer()
-
-@admin_config_router.message(ACS.api_edit_val)
-async def af_save(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
-    if message.text == "❌ Bekor":
-        await state.clear(); await message.answer("❌", reply_markup=admin_kb()); return
-    data  = await state.get_data()
-    cid   = data["edit_cid"]
-    field = data["edit_field"]
-    try:
-        val = float(message.text.replace(",", ".").strip())
-        if field in ("min", "max"): val = int(val)
-    except ValueError:
-        await message.answer("❌ Raqam kiriting:"); return
-    s = get_settings()
-    s[f"{cid}_{field}"] = val
-    save_settings(s)
+@dp.message(lambda m: m.text == "◀️ Orqaga")
+async def back_handler(message: Message, state: FSMContext):
+    chat_id = message.chat.id
     await state.clear()
-    note = ""
-    try:
-        from rates_api import update_live_rates
-        await update_live_rates()
-        note = "\n✅ Kurslar qayta hisoblandi."
-    except Exception as e:
-        note = f"\n⚠️ Kurs yangilanmadi: {e}"
-    label, _ = FIELD_HINTS.get(field, (field, ""))
-    await message.answer(
-        f"✅ {cname(cid)} — {label}: {fmt(val)}{note}",
-        reply_markup=admin_kb()
-    )
+    if chat_id == ADMIN_ID:
+        await message.answer("🖥 Asosiy menyu", reply_markup=admin_menu)
+    else:
+        await message.answer("🖥 Asosiy menyu", reply_markup=menu)
 
-
-
-#  💹 MANUAL KURSLAR
-
-def manual_list_kb():
-    manual = get_manual()
-    rows   = []
-    for key, info in manual.items():
-        p = key.split(":")
-        if len(p) == 2:
-            rows.append([InlineKeyboardButton(
-                text=f"💱 {cname(p[0])} ➡️ {cname(p[1])} | {info.get('rate','?')}",
-                callback_data=f"MV_{key}"
-            )])
-    rows.append([InlineKeyboardButton(text="➕ Yangi qo'shish", callback_data="MADD")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-def manual_detail_kb(key):
-    info = get_manual().get(key, {})
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"💱 Kurs: {info.get('rate','—')}",           callback_data=f"ME_{key}__rate")],
-        [InlineKeyboardButton(text=f"⬇️ Min: {fmt(info.get('min',0))}",          callback_data=f"ME_{key}__min")],
-        [InlineKeyboardButton(text=f"⬆️ Max: {fmt(info.get('max',0))}",          callback_data=f"ME_{key}__max")],
-        [InlineKeyboardButton(text=f"💸 Komissiya: {info.get('commission',1)}%",  callback_data=f"ME_{key}__commission")],
-        [InlineKeyboardButton(text="🗑 O'chirish",                                callback_data=f"MDEL_{key}")],
-        [InlineKeyboardButton(text="🔙 Orqaga",                                   callback_data="MBACK")],
-    ])
-
-def cur_select_kb(prefix, exclude=""):
-    rows = []
-    row  = []
-    for cur in CURRENCIES:
-        if cur["id"] == exclude: continue
-        row.append(InlineKeyboardButton(text=cur["name"], callback_data=f"{prefix}{cur['id']}"))
+@dp.message(lambda m: m.text == key2)
+async def my_wallets(message: Message):
+    chat_id = message.chat.id
+    if is_banned(chat_id) or not await joinchat(chat_id):
+        return
+    msg = "<b>💳 Sizning hamyonlaringiz:</b>\n\n"
+    for w in wallets:
+        val = read_file(f"tizim/hamyon/{chat_id}/{w}.txt") or "kiritilmagan"
+        msg += f"📌 {w.upper()}: <code>{val}</code>\n"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[])
+    row = []
+    for w in wallets:
+        row.append(InlineKeyboardButton(text=f"➕ {w.upper()}", callback_data=f"add_{w}"))
         if len(row) == 2:
-            rows.append(row); row = []
-    if row: rows.append(row)
-    rows.append([InlineKeyboardButton(text="❌ Bekor", callback_data="MBACK")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+            keyboard.inline_keyboard.append(row)
+            row = []
+    if row:
+        keyboard.inline_keyboard.append(row)
+    await message.answer(msg, parse_mode="HTML", reply_markup=keyboard)
 
+@dp.message(lambda m: m.text == key3)
+async def kurs(message: Message):
+    chat_id = message.chat.id
+    if is_banned(chat_id) or not await joinchat(chat_id):
+        return
+    valyuta = get_valyuta()
+    kurs = get_kurs()
+    msg = f"📉 Sotish:\n1 RUB = {kurs['sotish_rub']} {valyuta}\n1 USD = {kurs['sotish_usd']} {valyuta}\n\n📉 Sotib olish:\n1 RUB = {kurs['sotib_rub']} {valyuta}\n1 USD = {kurs['sotib_usd']} {valyuta}"
+    await message.answer(msg)
 
-@admin_config_router.message(F.text == "💹 Manual kurslar")
-async def admin_manual(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
+@dp.message(lambda m: m.text == key4)
+async def support(message: Message):
+    chat_id = message.chat.id
+    if is_banned(chat_id) or not await joinchat(chat_id):
+        return
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📞 Bot orqali xabar", callback_data="supp")]])
+    await message.answer(f"<b>{get_support()}</b>", parse_mode="HTML", reply_markup=keyboard)
+
+@dp.message(lambda m: m.text == key5)
+async def search_exchange(message: Message, state: FSMContext):
+    chat_id = message.chat.id
+    if is_banned(chat_id) or not await joinchat(chat_id):
+        return
+    await message.answer("<b>🆔 Almashuv ID'sini yuboring:</b>", parse_mode="HTML", reply_markup=back)
+    await state.set_state(Form.search_id)
+
+@dp.message(Form.search_id)
+async def process_search(message: Message, state: FSMContext):
+    chat_id = message.chat.id
+    text = message.text
+    valyuta = get_valyuta()
+    if os.path.exists(f"obmen/{text}/id.txt"):
+        info = f"ID: {read_file(f'obmen/{text}/id.txt')}\n"
+        info += f"Egasi: {read_file(f'obmen/{text}/egasi.txt')}\n"
+        info += f"Holat: {read_file(f'obmen/{text}/holat.txt')}\n"
+        info += f"Valyuta: {read_file(f'obmen/{text}/valyuta.txt')}\n"
+        info += f"Sana: {read_file(f'obmen/{text}/sana.txt')}\n"
+        info += f"Miqdor: {read_file(f'obmen/{text}/miqdor.txt')} {valyuta}"
+        await message.answer(f"<b>✅ Almashuv topildi:</b>\n\n{info}", parse_mode="HTML")
+    else:
+        await message.answer("<b>⚠️ Almashuv topilmadi!</b>", parse_mode="HTML")
     await state.clear()
-    manual = get_manual()
-    await message.answer(
-        f"💹 Manual kurslar ({len(manual)} ta)\n"
-        f"API ishlamagan juftliklar uchun.",
-        reply_markup=manual_list_kb()
-    )
 
-@admin_config_router.callback_query(F.data == "MBACK")
-async def mback(cb: CallbackQuery, state: FSMContext):
-    if not is_admin(cb.from_user.id): return
+@dp.message(lambda m: m.text == key1)
+async def exchange_start(message: Message):
+    chat_id = message.chat.id
+    if is_banned(chat_id) or not await joinchat(chat_id):
+        return
+    if get_status() == "❌":
+        await message.answer("<b>⚠️ Almashinuv jarayonlari vaqtinchalik bloklangan.</b>", parse_mode="HTML")
+        return
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[])
+    for w in wallets:
+        keyboard.inline_keyboard.append([
+            InlineKeyboardButton(text=f"🔼 {w.upper()}", callback_data=f"from_{w}"),
+            InlineKeyboardButton(text=f"🔽 {w.upper()}", callback_data="error")
+        ])
+    await message.answer("<b>🔼 Berish valyutasini tanlang:</b>", parse_mode="HTML", reply_markup=keyboard)
+
+# ============ ADMIN PANEL ============
+@dp.message(lambda m: m.text == "🗄 Boshqarish" and m.chat.id == ADMIN_ID)
+async def admin_panel_handler(message: Message, state: FSMContext):
+    await message.answer("<b>Admin paneliga xush kelibsiz!</b>", parse_mode="HTML", reply_markup=admin_panel)
     await state.clear()
-    manual = get_manual()
-    await cb.message.edit_text(f"💹 Manual kurslar ({len(manual)} ta)", reply_markup=manual_list_kb())
-    await cb.answer()
 
-@admin_config_router.callback_query(F.data.startswith("MV_"))
-async def mv_view(cb: CallbackQuery):
-    if not is_admin(cb.from_user.id): return
-    key  = cb.data[3:]
-    p    = key.split(":")
-    info = get_manual().get(key, {})
-    await cb.message.edit_text(
-        f"💱 {cname(p[0])} ➡️ {cname(p[1])}\n\n"
-        f"Kurs: {info.get('rate','—')}\n"
-        f"Min:  {fmt(info.get('min',0))}\n"
-        f"Max:  {fmt(info.get('max',0))}\n"
-        f"Komissiya: {info.get('commission',1)}%",
-        reply_markup=manual_detail_kb(key)
-    )
-    await cb.answer()
+@dp.message(lambda m: m.text == "📊 Statistika" and m.chat.id == ADMIN_ID)
+async def stats(message: Message):
+    users = len((read_file("azo.dat") or "").split("\n")) if file_exists("azo.dat") else 0
+    exchanges = len(os.listdir("obmen")) if os.path.exists("obmen") else 0
+    await message.answer(f"👥 Foydalanuvchilar: {users}\n🔄 Almashuvlar: {exchanges}")
 
-@admin_config_router.callback_query(F.data.startswith("MDEL_"))
-async def mdel(cb: CallbackQuery):
-    if not is_admin(cb.from_user.id): return
-    key    = cb.data[5:]
-    manual = get_manual()
-    if key in manual:
-        del manual[key]; save_manual(manual)
-    await cb.message.edit_text("✅ O'chirildi!", reply_markup=manual_list_kb())
-    await cb.answer()
-
-@admin_config_router.callback_query(F.data.startswith("ME_"))
-async def me_field(cb: CallbackQuery, state: FSMContext):
-    if not is_admin(cb.from_user.id): return
-    raw   = cb.data[3:]
-    key, field = raw.split("__", 1)
-    info  = get_manual().get(key, {})
-    cur_v = info.get(field, "—")
-    await state.set_state(ACS.man_field_val)
-    await state.update_data(man_key=key, man_field=field)
-    labels = {"rate": "Kurs", "min": "Minimal", "max": "Maksimal", "commission": "Komissiya (%)"}
-    await cb.message.edit_text(
-        f"✏️ {labels.get(field, field)}\nHozirgi: {cur_v}\n\nYangi qiymat:"
-    )
-    await cb.answer()
-
-@admin_config_router.message(ACS.man_field_val)
-async def me_save(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
-    if message.text == "❌ Bekor":
-        await state.clear(); await message.answer("❌", reply_markup=admin_kb()); return
-    data  = await state.get_data()
-    key, field = data["man_key"], data["man_field"]
-    try:
-        val = float(message.text.replace(",", "."))
-        if field in ("min", "max"): val = int(val)
-    except:
-        await message.answer("❌ Raqam kiriting:"); return
-    manual = get_manual()
-    if key not in manual: manual[key] = {}
-    manual[key][field] = val
-    save_manual(manual)
-    await state.clear()
-    await message.answer(f"✅ Yangilandi: {fmt(val)}", reply_markup=admin_kb())
-
-@admin_config_router.callback_query(F.data == "MADD")
-async def madd(cb: CallbackQuery, state: FSMContext):
-    if not is_admin(cb.from_user.id): return
-    await state.update_data(man_step="from")
-    await cb.message.edit_text("➕ 1-valyuta (FROM):", reply_markup=cur_select_kb("MFROM_"))
-    await cb.answer()
-
-@admin_config_router.callback_query(F.data.startswith("MFROM_"))
-async def mfrom(cb: CallbackQuery, state: FSMContext):
-    if not is_admin(cb.from_user.id): return
-    fid = cb.data[6:]
-    await state.update_data(man_from_id=fid)
-    await cb.message.edit_text(
-        f"✅ FROM: {cname(fid)}\n\n2-valyuta (TO):",
-        reply_markup=cur_select_kb("MTO_", exclude=fid)
-    )
-    await cb.answer()
-
-@admin_config_router.callback_query(F.data.startswith("MTO_"))
-async def mto(cb: CallbackQuery, state: FSMContext):
-    if not is_admin(cb.from_user.id): return
-    tid  = cb.data[4:]
-    data = await state.get_data()
-    await state.update_data(man_to_id=tid)
-    await state.set_state(ACS.man_rate)
-    await cb.message.edit_text(
-        f"✅ {cname(data['man_from_id'])} ➡️ {cname(tid)}\n\n"
-        f"💱 Kursni kiriting (1 {cname(data['man_from_id'])} = ? {cname(tid)}):"
-    )
-    await cb.answer()
-
-@admin_config_router.message(ACS.man_rate)
-async def mrate(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
-    if message.text == "❌ Bekor":
-        await state.clear(); await message.answer("❌", reply_markup=admin_kb()); return
-    try: v = float(message.text.replace(",", "."))
-    except: await message.answer("❌ Raqam:"); return
-    await state.update_data(man_rate_v=v)
-    await state.set_state(ACS.man_min)
-    await message.answer(f"✅ Kurs: {v}\n\n⬇️ Minimal miqdor:")
-
-@admin_config_router.message(ACS.man_min)
-async def mmin(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
-    try: v = int(float(message.text.replace(",", "")))
-    except: await message.answer("❌ Raqam:"); return
-    await state.update_data(man_min_v=v)
-    await state.set_state(ACS.man_max)
-    await message.answer(f"✅ Min: {v:,}\n\n⬆️ Maksimal miqdor:")
-
-@admin_config_router.message(ACS.man_max)
-async def mmax(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
-    try: v = int(float(message.text.replace(",", "")))
-    except: await message.answer("❌ Raqam:"); return
-    await state.update_data(man_max_v=v)
-    await state.set_state(ACS.man_comm)
-    await message.answer(f"✅ Max: {v:,}\n\n💸 Komissiya (%):")
-
-@admin_config_router.message(ACS.man_comm)
-async def mcomm(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
-    try: v = float(message.text.replace(",", "."))
-    except: await message.answer("❌ Raqam:"); return
-    data   = await state.get_data()
-    key    = f"{data['man_from_id']}:{data['man_to_id']}"
-    manual = get_manual()
-    manual[key] = {
-        "rate": data["man_rate_v"], "min": data["man_min_v"],
-        "max": data["man_max_v"],   "commission": v,
-    }
-    save_manual(manual)
-    await state.clear()
-    await message.answer(
-        f"✅ Qo'shildi!\n"
-        f"💱 {cname(data['man_from_id'])} ➡️ {cname(data['man_to_id'])}\n"
-        f"Kurs: {data['man_rate_v']} | Min: {fmt(data['man_min_v'])} | Max: {fmt(data['man_max_v'])} | Komissiya: {v}%",
-        reply_markup=admin_kb()
-    )
-
-
-
-#  💳 TO'LOV KARTALARI
-
-def cards_kb():
-    cards = get_cards()
-    rows  = []
-    for cur in CURRENCIES:
-        num  = cards.get(cur["id"], "—")
-        icon = "💳" if cur["type"] == "card" else "📲"
-        rows.append([InlineKeyboardButton(
-            text=f"{icon} {cur['name']}: {num}",
-            callback_data=f"CARD_{cur['id']}"
-        )])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-@admin_config_router.message(F.text == "💳 To'lov kartalari")
-async def admin_cards(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
-    await state.clear()
-    await message.answer("💳 To'lov kartalari / Walletlar:", reply_markup=cards_kb())
-
-@admin_config_router.callback_query(F.data.startswith("CARD_"))
-async def card_edit(cb: CallbackQuery, state: FSMContext):
-    if not is_admin(cb.from_user.id): return
-    cid   = cb.data[5:]
-    cur   = get_currency_by_id(cid)
-    cur_v = get_cards().get(cid, "—")
-    t     = "karta raqami" if cur and cur["type"] == "card" else "wallet manzili"
-    await state.set_state(ACS.card_val)
-    await state.update_data(card_cid=cid)
-    await cb.message.edit_text(
-        f"{'💳' if cur and cur['type']=='card' else '📲'} {cur['name'] if cur else cid}\n\n"
-        f"Hozirgi: <code>{cur_v}</code>\n\n"
-        f"Yangi {t} kiriting:",
-        parse_mode="HTML"
-    )
-    await cb.answer()
-
-@admin_config_router.message(ACS.card_val)
-async def card_save(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
-    if message.text == "❌ Bekor":
-        await state.clear(); await message.answer("❌", reply_markup=admin_kb()); return
-    data  = await state.get_data()
-    cid   = data["card_cid"]
-    cards = get_cards()
-    cards[cid] = message.text.strip()
-    save_cards(cards)
-    await state.clear()
-    cur = get_currency_by_id(cid)
-    await message.answer(
-        f"✅ {cur['name'] if cur else cid} yangilandi!\n<code>{message.text.strip()}</code>",
-        reply_markup=admin_kb(), parse_mode="HTML"
-    )
-
-
-
-#  🔄 KURSNI YANGILASH
-
-@admin_config_router.message(F.text == "🔄 Kursni yangilash")
-async def admin_refresh(message: Message):
-    if not is_admin(message.from_user.id): return
-    msg = await message.answer("⏳ Yangilanmoqda...")
-    try:
-        from rates_api import update_live_rates, get_rates_text
-        live = await update_live_rates()
-        text = get_rates_text("uz")
-        await msg.edit_text(f"✅ {len(live)} ta kurs yangilandi!\n\n{text}")
-    except Exception as e:
-        await msg.edit_text(f"❌ Xato: {e}")
-
-
-
-#  📦 BUYURTMALAR
-
-STATUS = {
-    "pending_payment": "⏳ Kutilmoqda",
-    "receipt_sent":    "🧾 Chek yuborilgan",
-    "completed":       "✅ Yakunlangan",
-    "cancelled":       "❌ Bekor",
-}
-
-def orders_kb():
-    orders  = get_orders()
-    pending = sum(1 for o in orders.values() if o.get("status") in ("pending_payment","receipt_sent"))
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"⏳ Kutilayotgan ({pending})", callback_data="ORD_f_pending")],
-        [InlineKeyboardButton(text="🧾 Chek yuborilgan",           callback_data="ORD_f_receipt")],
-        [InlineKeyboardButton(text="✅ Yakunlangan",               callback_data="ORD_f_done")],
-        [InlineKeyboardButton(text="❌ Bekor qilingan",            callback_data="ORD_f_cancelled")],
-        [InlineKeyboardButton(text="📋 Barchasi",                  callback_data="ORD_f_all")],
-    ])
-
-def ord_action_kb(oid, status):
-    rows = []
-    if status in ("pending_payment","receipt_sent"):
-        rows.append([InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"OCONF_{oid}")])
-        rows.append([InlineKeyboardButton(text="❌ Rad etish",  callback_data=f"OREJ_{oid}")])
-    rows.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data="ORD_BACK")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-@admin_config_router.message(F.text == "📦 Buyurtmalar")
-async def admin_orders(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
-    await state.clear()
-    orders = get_orders()
-    p = sum(1 for o in orders.values() if o.get("status") in ("pending_payment","receipt_sent"))
-    await message.answer(f"📦 Buyurtmalar\nJami: {len(orders)} | ⏳: {p}", reply_markup=orders_kb())
-
-@admin_config_router.callback_query(F.data == "ORD_BACK")
-async def ord_back(cb: CallbackQuery):
-    if not is_admin(cb.from_user.id): return
-    orders = get_orders()
-    p = sum(1 for o in orders.values() if o.get("status") in ("pending_payment","receipt_sent"))
-    await cb.message.edit_text(f"📦 Buyurtmalar\nJami: {len(orders)} | ⏳: {p}", reply_markup=orders_kb())
-    await cb.answer()
-
-@admin_config_router.callback_query(F.data.startswith("ORD_f_"))
-async def ord_list(cb: CallbackQuery):
-    if not is_admin(cb.from_user.id): return
-    filt = cb.data[6:]
-    fmap = {
-        "pending":   ["pending_payment"],
-        "receipt":   ["receipt_sent"],
-        "done":      ["completed"],
-        "cancelled": ["cancelled"],
-        "all":       list(STATUS.keys()),
-    }
-    allowed  = fmap.get(filt, [])
-    filtered = sorted(
-        [o for o in get_orders().values() if o.get("status") in allowed],
-        key=lambda x: x.get("order_id", 0), reverse=True
-    )
-    if not filtered:
-        await cb.answer("📭 Yo'q", show_alert=True); return
-    rows = []
-    for o in filtered[:15]:
-        icon = {"pending_payment":"⏳","receipt_sent":"🧾","completed":"✅","cancelled":"❌"}.get(o.get("status"),"❓")
-        rows.append([InlineKeyboardButton(
-            text=f"{icon} #{o['order_id']} | {o.get('from_name','?')}→{o.get('to_name','?')} | {fmt(o.get('send_amount',0))}",
-            callback_data=f"ORD_v_{o['order_id']}"
-        )])
-    rows.append([InlineKeyboardButton(text="🔙", callback_data="ORD_BACK")])
-    await cb.message.edit_text(f"📋 {len(filtered)} ta:", reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
-    await cb.answer()
-
-@admin_config_router.callback_query(F.data.startswith("ORD_v_"))
-async def ord_view(cb: CallbackQuery):
-    if not is_admin(cb.from_user.id): return
-    oid = int(cb.data[6:])
-    o   = get_orders().get(str(oid))
-    if not o: await cb.answer("❌", show_alert=True); return
-    text = (
-        f"📦 Buyurtma #{o['order_id']}\n"
-        f"📅 {o.get('created_at','—')}\n"
-        f"🔖 {STATUS.get(o.get('status',''),'—')}\n\n"
-        f"👤 {o.get('full_name','—')} (@{o.get('username','—')})\n"
-        f"🆔 {o.get('user_id','—')}\n\n"
-        f"🔄 {o.get('from_name','?')} ➡️ {o.get('to_name','?')}\n"
-        f"⬆️ Beradi: {fmt(o.get('send_amount',0))} {o.get('from_name','')}\n"
-        f"⬇️ Oladi: {fmt(o.get('recv_amount', o.get('receive_amount',0)))} {o.get('to_name','')}\n\n"
-        f"💳 {o.get('from_name','')}: <code>{o.get('sender_card','—')}</code>\n"
-        f"💳 {o.get('to_name','')}: <code>{o.get('receiver_card','—')}</code>"
-    )
-    await cb.message.edit_text(text, reply_markup=ord_action_kb(oid, o.get("status","")), parse_mode="HTML")
-    await cb.answer()
-
-@admin_config_router.callback_query(F.data.startswith("OCONF_"))
-async def oconf(cb: CallbackQuery, bot: Bot):
-    if not is_admin(cb.from_user.id): return
-    oid = int(cb.data[6:])
-    order = get_orders().get(str(oid))
-    if not order:
-        await cb.answer("❌ Buyurtma topilmadi", show_alert=True)
-        return
-    if order.get("status") == "completed":
-        await cb.answer("Bu buyurtma allaqachon tasdiqlangan", show_alert=True)
-        return
-    updated = set_order_status(oid, "completed")
-    final_order = updated or order
-    uid = final_order.get("user_id")
-    if uid:
-        try:
-            await bot.send_message(uid, f"✅ Buyurtma #{oid} tasdiqlandi.\n\n💸 Pul tushdi.")
-        except Exception:
-            pass
-    bonus_info = award_referral_bonus_for_order(oid)
-    if bonus_info:
-        ref_uid = bonus_info.get("referrer_id")
-        if ref_uid:
-            try:
-                await bot.send_message(
-                    ref_uid,
-                    f"🎁 Referral bonusi qo'shildi!\n"
-                    f"💰 +{format_money(bonus_info.get('bonus_amount', 0))} so'm\n"
-                    f"💼 Yangi balans: {format_money(bonus_info.get('new_balance', 0))} so'm"
-                )
-            except Exception:
-                pass
-    await send_transaction_to_channel(bot, final_order)
-    await safe_edit_admin_message(cb, f"✅ Buyurtma #{oid} tasdiqlandi.")
-    await cb.answer("✅")
-
-@admin_config_router.callback_query(F.data.startswith("OREJ_"))
-async def orej(cb: CallbackQuery, bot: Bot):
-    if not is_admin(cb.from_user.id): return
-    oid = int(cb.data[5:])
-    order = get_orders().get(str(oid))
-    if not order:
-        await cb.answer("❌ Buyurtma topilmadi", show_alert=True)
-        return
-    if order.get("status") == "cancelled":
-        await cb.answer("Bu buyurtma allaqachon bekor qilingan", show_alert=True)
-        return
-    updated = set_order_status(oid, "cancelled")
-    uid = (updated or order).get("user_id")
-    if uid:
-        try:
-            await bot.send_message(uid, f"❌ Buyurtma #{oid} bekor qilindi.\n\nSavollar uchun admin bilan bog'laning.")
-        except Exception:
-            pass
-    await safe_edit_admin_message(cb, f"❌ Buyurtma #{oid} bekor qilindi.")
-    await cb.answer("❌")
-
-
-
-#  📢 KANALLAR
-
-@admin_config_router.message(F.text == "🎁 Referral bonus")
-async def admin_referral_menu(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
-    await state.clear()
-    await message.answer(referral_stats_text(), reply_markup=ref_admin_kb())
-
-
-@admin_config_router.callback_query(F.data == "REFADM_BACK")
-@admin_config_router.callback_query(F.data == "REFADM_HOME")
-async def refadm_home(cb: CallbackQuery, state: FSMContext):
-    if not is_admin(cb.from_user.id): return
-    await state.clear()
-    await cb.message.edit_text(referral_stats_text(), reply_markup=ref_admin_kb())
-    await cb.answer()
-
-
-@admin_config_router.callback_query(F.data == "REFADM_SETTINGS")
-async def refadm_settings(cb: CallbackQuery, state: FSMContext):
-    if not is_admin(cb.from_user.id): return
-    await state.clear()
-    await cb.message.edit_text("⚙️ Referral sozlamalari:", reply_markup=ref_settings_kb())
-    await cb.answer()
-
-
-@admin_config_router.callback_query(F.data.startswith("REFSET_"))
-async def refset_edit(cb: CallbackQuery, state: FSMContext):
-    if not is_admin(cb.from_user.id): return
-    field = cb.data[7:]
-    if field not in ("bonus_per_completed_order", "min_withdraw"):
-        await cb.answer("❌ Noma'lum maydon", show_alert=True)
-        return
-    settings = get_referral_settings()
-    current = settings.get(field, 0)
-    label = "Buyurtma uchun bonus" if field == "bonus_per_completed_order" else "Minimal yechish"
-    await state.set_state(ACS.ref_set_val)
-    await state.update_data(ref_field=field)
-    await cb.message.edit_text(
-        f"⚙️ {label}\n\nHozirgi qiymat: {format_money(current)} so'm\n\nYangi qiymatni kiriting:"
-    )
-    await cb.answer()
-
-
-@admin_config_router.message(ACS.ref_set_val)
-async def refset_save(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
-    if (message.text or "").strip() == "❌ Bekor":
-        await state.clear()
-        await message.answer("❌ Bekor qilindi", reply_markup=admin_kb())
-        return
-    data = await state.get_data()
-    field = data.get("ref_field")
-    if field not in ("bonus_per_completed_order", "min_withdraw"):
-        await state.clear()
-        await message.answer("❌ Session tugagan, qaytadan kiriting.", reply_markup=admin_kb())
-        return
-    try:
-        value = float((message.text or "").replace(",", ".").strip())
-        if value < 0:
-            raise ValueError
-    except Exception:
-        await message.answer("❌ Musbat raqam kiriting:")
-        return
-
-    db = load_db()
-    settings = get_referral_settings(db)
-    settings[field] = round(value, 2)
-    db["referral_settings"] = settings
-    save_db(db)
-
-    await state.clear()
-    await message.answer("✅ Referral sozlamasi yangilandi.", reply_markup=admin_kb())
-
-
-@admin_config_router.callback_query(F.data == "REFADM_ADD")
-@admin_config_router.callback_query(F.data == "REFADM_SUB")
-async def refadm_adjust_start(cb: CallbackQuery, state: FSMContext):
-    if not is_admin(cb.from_user.id): return
-    mode = "add" if cb.data.endswith("ADD") else "sub"
-    await state.set_state(ACS.ref_uid)
-    await state.update_data(ref_mode=mode)
-    await cb.message.answer(
-        f"User ID kiriting (bonusni {adjust_mode_title(mode)}):",
-        reply_markup=xkb()
-    )
-    await cb.answer()
-
-
-@admin_config_router.message(ACS.ref_uid)
-async def refadm_adjust_uid(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
-    if (message.text or "").strip() == "❌ Bekor":
-        await state.clear()
-        await message.answer("❌ Bekor qilindi", reply_markup=admin_kb())
-        return
-    try:
-        uid = int((message.text or "").strip())
-    except Exception:
-        await message.answer("❌ User ID son bo'lishi kerak:")
-        return
-    await state.update_data(ref_uid=uid)
-    await state.set_state(ACS.ref_amount)
-    await message.answer("Miqdorni kiriting (masalan: 5000):")
-
-
-@admin_config_router.message(ACS.ref_amount)
-async def refadm_adjust_amount(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
-    if (message.text or "").strip() == "❌ Bekor":
-        await state.clear()
-        await message.answer("❌ Bekor qilindi", reply_markup=admin_kb())
-        return
-    data = await state.get_data()
-    mode = data.get("ref_mode", "add")
-    uid = data.get("ref_uid")
-    if uid is None:
-        await state.clear()
-        await message.answer("❌ Session tugagan, qaytadan kiriting.", reply_markup=admin_kb())
-        return
-    try:
-        amount = float((message.text or "").replace(",", ".").strip())
-    except Exception:
-        await message.answer("❌ Raqam kiriting:")
-        return
-
-    user, err = admin_adjust_referral_bonus(uid, amount, mode)
-    if err == "not_found":
-        await message.answer("❌ User topilmadi.")
-        return
-    if err == "bad_amount":
-        await message.answer("❌ Miqdor musbat bo'lishi kerak.")
-        return
-    if err == "insufficient":
-        await message.answer("❌ Userda bu miqdorni ayirish uchun bonus yetarli emas.")
-        return
-
-    await state.clear()
-    new_balance = format_money((user or {}).get("referral_bonus", 0.0))
-    await message.answer(
-        f"✅ Bonus yangilandi.\nUser: {uid}\nBalans: {new_balance} so'm",
-        reply_markup=admin_kb()
-    )
-
-
-@admin_config_router.callback_query(F.data == "REFADM_PENDING")
-async def refadm_pending(cb: CallbackQuery, state: FSMContext):
-    if not is_admin(cb.from_user.id): return
-    await state.clear()
-    items = get_pending_withdrawals(15)
-    if not items:
-        await cb.message.edit_text(
-            "📭 Pending referral yechish so'rovlari yo'q.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 Orqaga", callback_data="REFADM_HOME")]
-            ])
-        )
-        await cb.answer()
-        return
-    await cb.message.edit_text(
-        f"📋 Pending referral yechishlar: {len(items)} ta",
-        reply_markup=pending_withdraw_kb(items)
-    )
-    await cb.answer()
-
-
-@admin_config_router.callback_query(F.data.startswith("REFWD_VIEW_"))
-async def refwd_view(cb: CallbackQuery):
-    if not is_admin(cb.from_user.id): return
-    try:
-        req_id = int(cb.data[11:])
-    except Exception:
-        await cb.answer("❌ Xato", show_alert=True)
-        return
-    req = get_withdraw_request(req_id)
-    if not req:
-        await cb.answer("❌ So'rov topilmadi", show_alert=True)
-        return
-    users = get_all_users()
-    user = users.get(str(req.get("user_id")), {})
-    full_name = f"{user.get('name', '')} {user.get('surname', '')}".strip() or "—"
-    phone = user.get("phone", "—")
-    status = req.get("status", "—")
-    text = (
-        f"💸 Referral yechish so'rovi #{req_id}\n\n"
-        f"👤 {full_name}\n"
-        f"🆔 {req.get('user_id')}\n"
-        f"📞 {phone}\n\n"
-        f"💰 Miqdor: {format_money(req.get('amount', 0))} so'm\n"
-        f"💳 Karta: {req.get('card', '—')}\n"
-        f"📅 {req.get('created_at', '—')}\n"
-        f"📌 Status: {status}"
-    )
-    await cb.message.edit_text(text, reply_markup=ref_withdraw_action_kb(req_id))
-    await cb.answer()
-
-
-@admin_config_router.callback_query(F.data.startswith("REFWD_OK_"))
-async def refwd_approve(cb: CallbackQuery, bot: Bot):
-    if not is_admin(cb.from_user.id): return
-    try:
-        req_id = int(cb.data[9:])
-    except Exception:
-        await cb.answer("❌ Xato", show_alert=True)
-        return
-    req, user, err = approve_withdraw_request(req_id, cb.from_user.id)
-    if err == "not_found":
-        await cb.answer("❌ So'rov topilmadi", show_alert=True)
-        return
-    if err == "already_processed":
-        await cb.answer("⚠️ So'rov allaqachon qayta ishlangan", show_alert=True)
-        return
-    if req and req.get("user_id"):
-        try:
-            await bot.send_message(
-                req.get("user_id"),
-                f"✅ Referral bonus yechish so'rovi tasdiqlandi.\n"
-                f"💸 {format_money(req.get('amount', 0))} so'm"
-            )
-        except Exception:
-            pass
-    await cb.message.edit_text(f"✅ Referral so'rov #{req_id} tasdiqlandi.")
-    await cb.answer("✅")
-
-
-@admin_config_router.callback_query(F.data.startswith("REFWD_NO_"))
-async def refwd_reject(cb: CallbackQuery, bot: Bot):
-    if not is_admin(cb.from_user.id): return
-    try:
-        req_id = int(cb.data[9:])
-    except Exception:
-        await cb.answer("❌ Xato", show_alert=True)
-        return
-    req, user, err = reject_withdraw_request(req_id, cb.from_user.id)
-    if err == "not_found":
-        await cb.answer("❌ So'rov topilmadi", show_alert=True)
-        return
-    if err == "already_processed":
-        await cb.answer("⚠️ So'rov allaqachon qayta ishlangan", show_alert=True)
-        return
-    if req and req.get("user_id"):
-        try:
-            await bot.send_message(
-                req.get("user_id"),
-                "❌ Referral bonus yechish so'rovi bekor qilindi.\nMiqdor balansga qaytarildi."
-            )
-        except Exception:
-            pass
-    await cb.message.edit_text(f"❌ Referral so'rov #{req_id} bekor qilindi.")
-    await cb.answer("❌")
-
-
-@admin_config_router.message(F.text == "📢 Kanallar")
-async def admin_channels(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
-    await state.clear()
-    chs = get_channels()
-    text = "📢 Kanallar:\n\n" + "\n".join(
-        f"{i}. {ch['channel_name']} | {ch['channel_link']} | {ch['channel_id']}"
-        for i,ch in enumerate(chs,1)
-    ) if chs else "📭 Kanallar yo'q."
-    await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Qo'shish", callback_data="CH_ADD")],
-        [InlineKeyboardButton(text="➖ O'chirish", callback_data="CH_DEL")],
-    ]))
-
-@admin_config_router.callback_query(F.data == "CH_ADD")
-async def ch_add(cb: CallbackQuery, state: FSMContext):
-    if not is_admin(cb.from_user.id): return
-    await state.set_state(ACS.ch_id)
-    await cb.message.edit_text("Kanal ID kiriting (masalan: -1001234567890):")
-    await cb.answer()
-
-@admin_config_router.message(ACS.ch_id)
-async def ch_id_val(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
-    try:
-        cid = int(message.text.strip())
-        await state.update_data(ch_id=cid)
-        await state.set_state(ACS.ch_link)
-        await message.answer("Kanal havolasi (https://t.me/...):")
-    except: await message.answer("❌ Son bo'lishi kerak:")
-
-@admin_config_router.message(ACS.ch_link)
-async def ch_link_val(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
-    await state.update_data(ch_link=message.text.strip())
-    await state.set_state(ACS.ch_name)
-    await message.answer("Kanal nomi:")
-
-@admin_config_router.message(ACS.ch_name)
-async def ch_name_val(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
-    data = await state.get_data()
-    ok   = add_channel(data["ch_id"], data["ch_link"], message.text.strip())
-    await state.clear()
-    await message.answer(
-        f"✅ {message.text.strip()} qo'shildi!" if ok else "❌ Allaqachon mavjud!",
-        reply_markup=admin_kb()
-    )
-
-@admin_config_router.callback_query(F.data == "CH_DEL")
-async def ch_del_start(cb: CallbackQuery, state: FSMContext):
-    if not is_admin(cb.from_user.id): return
-    chs = get_channels()
-    if not chs: await cb.answer("📭 Yo'q", show_alert=True); return
-    text = "O'chirish uchun kanal ID ni kiriting:\n\n" + "\n".join(
-        f"• {ch['channel_name']} → {ch['channel_id']}" for ch in chs
-    )
-    await state.set_state(ACS.ch_del)
-    await cb.message.edit_text(text)
-    await cb.answer()
-
-@admin_config_router.message(ACS.ch_del)
-async def ch_del_val(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
-    try:
-        ok = remove_channel(int(message.text.strip()))
-        await state.clear()
-        await message.answer("✅ O'chirildi!" if ok else "❌ Topilmadi!", reply_markup=admin_kb())
-    except: await message.answer("❌ Son bo'lishi kerak:")
-
-
-
-#  👥 FOYDALANUVCHILAR
-
-@admin_config_router.message(F.text == "👥 Foydalanuvchilar")
-async def admin_users(message: Message):
-    if not is_admin(message.from_user.id): return
-    await message.answer(f"👥 Ro'yxatdan o'tganlar: {len(get_all_users())} ta")
-
-
-
-#  📨 BROADCAST
-
-@admin_config_router.message(F.text == "📨 Broadcast")
+@dp.message(lambda m: m.text == "✉ Xabar yuborish" and m.chat.id == ADMIN_ID)
 async def broadcast_start(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
-    await state.set_state(ACS.broadcast)
-    await message.answer("Xabarni kiriting:", reply_markup=xkb())
+    await message.answer("Xabarni yuboring:", reply_markup=back)
+    await state.set_state(Form.broadcast)
 
-@admin_config_router.message(ACS.broadcast)
-async def broadcast_send(message: Message, state: FSMContext, bot: Bot):
-    if not is_admin(message.from_user.id): return
-    if message.text == "❌ Bekor":
-        await state.clear(); await message.answer("❌", reply_markup=admin_kb()); return
-    users = get_all_users()
-    ok = 0
+@dp.message(Form.broadcast)
+async def broadcast_send(message: Message, state: FSMContext):
+    text = message.text
+    users = (read_file("azo.dat") or "").split("\n")
+    count = 0
     for uid in users:
-        try: await bot.send_message(int(uid), message.text); ok += 1
-        except: pass
+        if uid.strip():
+            try:
+                await bot.send_message(int(uid), f"📢 <b>Xabar:</b>\n\n{text}", parse_mode="HTML")
+                count += 1
+            except:
+                pass
+    await message.answer(f"✅ {count} ta foydalanuvchiga yuborildi!", reply_markup=admin_panel)
     await state.clear()
-    await message.answer(f"✅ {ok}/{len(users)} ta yuborildi!", reply_markup=admin_kb())
 
-@admin_config_router.message(F.text == "🔙 Orqaga")
-async def admin_back(message: Message, state: FSMContext):
-    if not is_admin(message.from_user.id): return
+@dp.message(lambda m: m.text == "🔎 Foydalanuvchini boshqarish" and m.chat.id == ADMIN_ID)
+async def find_user_start(message: Message, state: FSMContext):
+    await message.answer("ID raqamini kiriting:", reply_markup=back)
+    await state.set_state(Form.find_user)
+
+@dp.message(Form.find_user)
+async def find_user_result(message: Message, state: FSMContext):
+    target = message.text.strip()
+    if not target.isdigit():
+        await message.answer("❌ ID raqam bo‘lishi kerak!")
+        return
+    if file_exists(f"odam/{target}.dat") or file_exists(f"tizim/hamyon/{target}"):
+        banned = file_exists(f"ban/{target}.txt")
+        btn = "🔕 Bandan olish" if banned else "🔔 Banlash"
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=btn, callback_data=f"ban_{target}")]])
+        await message.answer(f"✅ Foydalanuvchi topildi!\nID: {target}", reply_markup=keyboard)
+    else:
+        await message.answer("❌ Topilmadi!")
     await state.clear()
-    from keyboards import main_menu_keyboard
-    from database import get_user
-    user = get_user(message.from_user.id)
-    lang = user.get("lang", "uz") if user else "uz"
-    await message.answer("🏠 Asosiy menyu", reply_markup=main_menu_keyboard(lang))
+
+@dp.message(lambda m: m.text == "🎛 Tugmalar" and m.chat.id == ADMIN_ID)
+async def edit_keys_start(message: Message):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=key1, callback_data="edit_key1")],
+        [InlineKeyboardButton(text=key2, callback_data="edit_key2"), InlineKeyboardButton(text=key3, callback_data="edit_key3")],
+        [InlineKeyboardButton(text=key4, callback_data="edit_key4"), InlineKeyboardButton(text=key5, callback_data="edit_key5")]
+    ])
+    await message.answer("Tugmalardan birini tanlang:", reply_markup=keyboard)
+
+@dp.message(lambda m: m.text == "🔄 Almashuv holati" and m.chat.id == ADMIN_ID)
+async def toggle_status(message: Message):
+    status = get_status()
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="☑️", callback_data="status_on"), InlineKeyboardButton(text="❌", callback_data="status_off")]
+    ])
+    await message.answer(f"Holat: {status}", reply_markup=keyboard)
+
+@dp.message(lambda m: m.text == "⚙ Asosiy sozlamalar" and m.chat.id == ADMIN_ID)
+async def main_settings(message: Message):
+    await message.answer("⚙ Asosiy sozlamalar", reply_markup=asosiy)
+
+@dp.message(lambda m: m.text == "*️⃣ Birlamchi sozlamalar" and m.chat.id == ADMIN_ID)
+async def birinchi_settings(message: Message):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📋 Hozirgi holatni ko'rish", callback_data="holat")],
+        [InlineKeyboardButton(text="💶 Valyuta", callback_data="set_valyuta"), InlineKeyboardButton(text="💸 Usluga", callback_data="set_foiz")],
+        [InlineKeyboardButton(text="📎 Admin useri", callback_data="set_admin_user"), InlineKeyboardButton(text="💳 To'lov hamyonlari", callback_data="set_admin_wallets")],
+        [InlineKeyboardButton(text="💸 Valyuta kursi", callback_data="set_kurs"), InlineKeyboardButton(text=f"{key4} matni", callback_data="set_support")],
+        [InlineKeyboardButton(text="◀️ Orqaga", callback_data="back_to_main")]
+    ])
+    await message.answer("<b>*️⃣ Birlamchi sozlamalar bo'limidasiz.</b>", parse_mode="HTML", reply_markup=keyboard)
+
+@dp.message(lambda m: m.text == "📢 Kanallar" and m.chat.id == ADMIN_ID)
+async def channels_settings(message: Message):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔐 Majburiy obunalar", callback_data="majburiy")],
+        [InlineKeyboardButton(text="*⃣ Qo'shimcha kanallar", callback_data="qoshimcha")],
+        [InlineKeyboardButton(text="Yopish", callback_data="close")]
+    ])
+    await message.answer("Quyidagilardan birini tanlang:", reply_markup=keyboard)
+
+# ============ CALLBACK HANDLERLAR ============
+@dp.callback_query()
+async def callback_handler(call: CallbackQuery, state: FSMContext):
+    data = call.data
+    chat_id = call.message.chat.id
+    msg_id = call.message.message_id
+    await call.answer()
+
+    if is_banned(chat_id) or not await joinchat(chat_id):
+        return
+
+    # Obuna tekshirish
+    if data == "check_sub":
+        await bot.delete_message(chat_id, msg_id)
+        if await joinchat(chat_id):
+            await bot.send_message(chat_id, "✅ Obuna tasdiqlandi!", reply_markup=menu)
+        return
+
+    # Murojaat
+    if data == "supp":
+        await bot.delete_message(chat_id, msg_id)
+        await bot.send_message(chat_id, "📝 Murojaat matnini kiriting:", reply_markup=back)
+        await state.set_state(Form.contact)
+        return
+
+    # Hamyon qo'shish
+    if data.startswith("add_"):
+        w = data[4:]
+        await bot.delete_message(chat_id, msg_id)
+        await bot.send_message(chat_id, f"➕ {w.upper()} raqamini kiriting:", reply_markup=back)
+        await state.set_state(Form.add_wallet)
+        await state.update_data(wallet=w)
+        return
+
+    # Ayirboshlash: berish valyutasini tanlash
+    if data.startswith("from_"):
+        from_w = data[5:]
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[])
+        for w in wallets:
+            if w != from_w:
+                keyboard.inline_keyboard.append([InlineKeyboardButton(text=f"🔽 {w.upper()}", callback_data=f"to_{from_w}_{w}")])
+        await bot.edit_message_text(f"🔼 {from_w.upper()} dan qaysi valyutaga?", chat_id, msg_id, reply_markup=keyboard)
+        return
+
+    # Ayirboshlash: olish valyutasini tanlash va summa so'rash
+    if data.startswith("to_"):
+        _, from_w, to_w = data.split("_")
+        user_w = read_file(f"tizim/hamyon/{chat_id}/{from_w}.txt")
+        admin_w = read_file(f"tizim/hamyon/raqam/{ADMIN_ID}/{from_w}.txt")
+        if user_w == "kiritilmagan" or not user_w:
+            await call.answer(f"⚠️ Avval {from_w.upper()} hamyon kiriting!", show_alert=True)
+            return
+        if admin_w == "kiritilmagan" or not admin_w:
+            await call.answer("⚠️ Admin hamyoni kiritilmagan!", show_alert=True)
+            return
+        await bot.edit_message_text(f"🔄 {from_w.upper()} > {to_w.upper()}\n\n💳 Siz: {user_w}\n💳 Admin: {admin_w}\n\nSummani kiriting:", chat_id, msg_id, reply_markup=back)
+        await state.set_state(Form.exchange_amount)
+        await state.update_data(from_w=from_w, to_w=to_w)
+        return
+
+    # Almashuvni tasdiqlash / bekor qilish
+    if data.startswith("confirm_"):
+        ex_id = data[8:]
+        await bot.delete_message(chat_id, msg_id)
+        await bot.send_message(chat_id, "📸 To'lov chekini yuboring:", reply_markup=back)
+        await state.set_state(Form.contact)  # bu yerda alohida state kerak, lekin soddalik uchun contact qayta ishlatiladi
+        await state.update_data(ex_id=ex_id)
+        return
+
+    if data == "cancel_" + ex_id:  # not implemented exactly, but handle
+        await bot.delete_message(chat_id, msg_id)
+        await bot.send_message(chat_id, "❌ Almashuv bekor qilindi!", reply_markup=menu)
+        return
+
+    # Ban / unban
+    if data.startswith("ban_"):
+        target = data[4:]
+        if file_exists(f"ban/{target}.txt"):
+            os.remove(f"ban/{target}.txt")
+            await bot.send_message(chat_id, f"✅ {target} bandan olindi!")
+        else:
+            write_file(f"ban/{target}.txt", "ban")
+            await bot.send_message(chat_id, f"✅ {target} banlandi!")
+        await bot.delete_message(chat_id, msg_id)
+        return
+
+    # Almashuv holati
+    if data == "status_on":
+        write_file("tizim/holat.txt", "✅")
+        await bot.edit_message_text("Holat: ✅", chat_id, msg_id, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="☑️", callback_data="status_on"), InlineKeyboardButton(text="❌", callback_data="status_off")]]))
+    elif data == "status_off":
+        write_file("tizim/holat.txt", "❌")
+        await bot.edit_message_text("Holat: ❌", chat_id, msg_id, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="☑️", callback_data="status_on"), InlineKeyboardButton(text="❌", callback_data="status_off")]]))
+
+    # Admin: tugma tahrirlash
+    if data.startswith("edit_key"):
+        key_num = data[4:]  # "1", "2", ...
+        await bot.delete_message(chat_id, msg_id)
+        await bot.send_message(chat_id, "Yangi nom yuboring:", reply_markup=back)
+        await state.set_state(Form.edit_key)
+        await state.update_data(key_num=key_num)
+        return
+
+    # Admin: birlamchi sozlamalar
+    if data == "holat":
+        valyuta = get_valyuta()
+        foiz = get_foiz()
+        admin_user = read_file("tizim/user.txt") or "Kiritilmagan"
+        await bot.edit_message_text(f"<b>Hozirgi birlamchi sozlamalar:</b>\n\n1. Valyuta - {valyuta}\n2. Taklif narxi - {foiz}%\n3. Admin useri: {admin_user}", chat_id, msg_id, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Orqaga", callback_data="back_to_birinchi")]]))
+    elif data == "set_valyuta":
+        await bot.delete_message(chat_id, msg_id)
+        await bot.send_message(chat_id, "📝 Yangi valyuta nomini yuboring:", reply_markup=back)
+        await state.set_state(Form.set_valyuta)
+    elif data == "set_foiz":
+        await bot.delete_message(chat_id, msg_id)
+        await bot.send_message(chat_id, "📝 Yangi foizni yuboring (faqat raqam):", reply_markup=back)
+        await state.set_state(Form.set_foiz)
+    elif data == "set_admin_user":
+        await bot.delete_message(chat_id, msg_id)
+        await bot.send_message(chat_id, "📝 Admin userini yuboring:", reply_markup=back)
+        await state.set_state(Form.set_admin_user)
+    elif data == "set_admin_wallets":
+        await bot.delete_message(chat_id, msg_id)
+        await bot.send_message(chat_id, "Qaysi hamyonni o‘zgartirmoqchisiz? (masalan: uzcard, humo, ...)", reply_markup=back)
+        await state.set_state(Form.set_admin_wallet)
+    elif data == "set_kurs":
+        await bot.delete_message(chat_id, msg_id)
+        await bot.send_message(chat_id, "Kursni tanlang:\n1. RUB sotish\n2. USD sotish\n3. RUB sotib olish\n4. USD sotib olish\nRaqamni yuboring:", reply_markup=back)
+        await state.set_state(Form.set_kurs)
+    elif data == "set_support":
+        await bot.delete_message(chat_id, msg_id)
+        await bot.send_message(chat_id, "📝 Yangi aloqa matnini yuboring:", reply_markup=back)
+        await state.set_state(Form.set_support)
+
+    # Kanallar bo'limi
+    elif data == "majburiy":
+        await bot.edit_message_text("Majburiy obunalarni sozlash:", chat_id, msg_id, reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Qo'shish", callback_data="add_channel")],
+            [InlineKeyboardButton(text="📑 Ro'yxat", callback_data="list_channels"), InlineKeyboardButton(text="🗑 O'chirish", callback_data="delete_channels")],
+            [InlineKeyboardButton(text="◀️ Orqaga", callback_data="back_to_channels")]
+        ]))
+    elif data == "qoshimcha":
+        promo = get_promo()
+        await bot.edit_message_text(f"<b>Qo'shimcha kanallar</b>\n\nHozirgi to'lovlar kanali: {promo}", chat_id, msg_id, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🆕️ To'lovlar uchun", callback_data="set_promo")],
+            [InlineKeyboardButton(text="◀️ Orqaga", callback_data="back_to_channels")]
+        ]))
+    elif data == "add_channel":
+        await bot.delete_message(chat_id, msg_id)
+        await bot.send_message(chat_id, "Kanalni kiriting (format: Kanal nomi-Kanal_useri):", reply_markup=back)
+        await state.set_state(Form.add_channel)
+    elif data == "list_channels":
+        kanal = read_file("tizim/kanal.txt")
+        if not kanal:
+            await bot.edit_message_text("📂 Kanallar ro'yxati bo'sh!", chat_id, msg_id, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Orqaga", callback_data="majburiy")]]))
+        else:
+            soni = len(kanal.split("\n"))
+            await bot.edit_message_text(f"<b>📢 Kanallar ro'yxati:</b>\n{kanal}\n\nUlangan kanallar soni: {soni}", chat_id, msg_id, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Orqaga", callback_data="majburiy")]]))
+    elif data == "delete_channels":
+        delete_folder("tizim/kanal.txt")
+        await bot.edit_message_text("✅ Kanallar o'chirildi!", chat_id, msg_id, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="◀️ Orqaga", callback_data="majburiy")]]))
+    elif data == "set_promo":
+        await bot.delete_message(chat_id, msg_id)
+        await bot.send_message(chat_id, "Kanal username ni yuboring (masalan @my_channel):", reply_markup=back)
+        await state.set_state(Form.set_promo)
+
+    # Orqaga qaytishlar
+    elif data == "back_to_main":
+        await bot.delete_message(chat_id, msg_id)
+        await bot.send_message(chat_id, "Asosiy sozlamalar", reply_markup=asosiy)
+    elif data == "back_to_channels":
+        await bot.delete_message(chat_id, msg_id)
+        await bot.send_message(chat_id, "Kanallar", reply_markup=asosiy)
+    elif data == "back_to_birinchi":
+        await bot.delete_message(chat_id, msg_id)
+        await bot.send_message(chat_id, "*️⃣ Birlamchi sozlamalar", reply_markup=asosiy)
+    elif data == "close":
+        await bot.delete_message(chat_id, msg_id)
+
+# ============ FSM QADAMLARI ============
+@dp.message(Form.add_wallet)
+async def add_wallet(message: Message, state: FSMContext):
+    data = await state.get_data()
+    w = data["wallet"]
+    chat_id = message.chat.id
+    write_file(f"tizim/hamyon/{chat_id}/{w}.txt", message.text)
+    await message.answer(f"✅ {w.upper()} hamyon saqlandi!", reply_markup=menu)
+    await state.clear()
+
+@dp.message(Form.exchange_amount)
+async def exchange_amount(message: Message, state: FSMContext):
+    if not message.text.isdigit():
+        await message.answer("<b>Faqat raqam kiriting!</b>", parse_mode="HTML")
+        return
+    data = await state.get_data()
+    from_w = data["from_w"]
+    to_w = data["to_w"]
+    amount = float(message.text)
+    valyuta = get_valyuta()
+    foiz = get_foiz()
+    ex_id, jami, komissiya = create_exchange(message.chat.id, from_w, to_w, amount, valyuta, foiz)
+    user_w = read_file(f"tizim/hamyon/{message.chat.id}/{from_w}.txt")
+    msg = f"✅ Qabul qilindi!\n\n🆔 ID: {ex_id}\nTuri: {from_w} > {to_w}\nBerish: {amount} {valyuta}\nOlish: {jami} {valyuta}\n💳 {from_w}: {user_w}"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"confirm_{ex_id}"), InlineKeyboardButton(text="❌ Bekor", callback_data=f"cancel_{ex_id}")]
+    ])
+    await message.answer(msg, parse_mode="HTML", reply_markup=keyboard)
+    await state.clear()
+
+@dp.message(Form.contact)
+async def contact_send(message: Message, state: FSMContext):
+    chat_id = message.chat.id
+    username = message.from_user.username
+    text = message.text
+    await message.answer("✅ Xabaringiz adminga yuborildi!")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="📝 Javob", callback_data=f"reply_{chat_id}")]])
+    await bot.send_message(ADMIN_ID, f"📩 Yangi xabar:\n👤 {username}\n🆔 {chat_id}\n💬 {text}", reply_markup=keyboard)
+    await state.clear()
+
+@dp.message(Form.broadcast)
+async def broadcast(message: Message, state: FSMContext):
+    # already handled above
+    pass
+
+@dp.message(Form.find_user)
+async def find_user(message: Message, state: FSMContext):
+    # already handled above
+    pass
+
+@dp.message(Form.edit_key)
+async def edit_key(message: Message, state: FSMContext):
+    data = await state.get_data()
+    key_num = data["key_num"]
+    new_text = message.text
+    write_file(f"tugma/key{key_num}.txt", new_text)
+    global key1, key2, key3, key4, key5, menu, admin_menu
+    key1 = read_file("tugma/key1.txt") or "🔄 Valyuta ayirboshlash"
+    key2 = read_file("tugma/key2.txt") or "🔰 Hamyonlar"
+    key3 = read_file("tugma/key3.txt") or "📊 Valyuta kursi"
+    key4 = read_file("tugma/key4.txt") or "📞 Aloqa"
+    key5 = read_file("tugma/key5.txt") or "🔁 Almashuvlar"
+    menu = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=key1)],[KeyboardButton(text=key2),KeyboardButton(text=key3)],[KeyboardButton(text=key4),KeyboardButton(text=key5)]], resize_keyboard=True)
+    admin_menu = ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=key1)],[KeyboardButton(text=key2),KeyboardButton(text=key3)],[KeyboardButton(text=key4),KeyboardButton(text=key5)],[KeyboardButton(text="🗄 Boshqarish")]], resize_keyboard=True)
+    await message.answer(f"✅ Tugma {key_num} o‘zgartirildi!", reply_markup=admin_menu if message.chat.id == ADMIN_ID else menu)
+    await state.clear()
+
+@dp.message(Form.set_valyuta)
+async def set_valyuta(message: Message, state: FSMContext):
+    write_file("tizim/valyuta.txt", message.text)
+    await message.answer("✅ Valyuta nomi o‘zgartirildi!", reply_markup=asosiy)
+    await state.clear()
+
+@dp.message(Form.set_foiz)
+async def set_foiz(message: Message, state: FSMContext):
+    if message.text.isdigit():
+        write_file("tizim/uslug.txt", message.text)
+        await message.answer("✅ Komissiya foizi o‘zgartirildi!", reply_markup=asosiy)
+    else:
+        await message.answer("❌ Faqat raqam kiriting!")
+    await state.clear()
+
+@dp.message(Form.set_admin_user)
+async def set_admin_user(message: Message, state: FSMContext):
+    write_file("tizim/user.txt", message.text)
+    await message.answer("✅ Admin useri o‘zgartirildi!", reply_markup=asosiy)
+    await state.clear()
+
+@dp.message(Form.set_admin_wallet)
+async def set_admin_wallet(message: Message, state: FSMContext):
+    w = message.text.lower()
+    if w in wallets:
+        await message.answer(f"📝 {w.upper()} uchun yangi raqamni yuboring:", reply_markup=back)
+        await state.update_data(wallet=w)
+        await state.set_state(Form.set_admin_wallet_value)
+    else:
+        await message.answer("❌ Bunday hamyon mavjud emas! (uzcard, humo, ...)", reply_markup=back)
+
+@dp.message(Form.set_admin_wallet_value)
+async def set_admin_wallet_value(message: Message, state: FSMContext):
+    data = await state.get_data()
+    w = data["wallet"]
+    write_file(f"tizim/hamyon/raqam/{ADMIN_ID}/{w}.txt", message.text)
+    await message.answer(f"✅ {w.upper()} to‘lov hamyoni o‘zgartirildi!", reply_markup=asosiy)
+    await state.clear()
+
+@dp.message(Form.set_kurs)
+async def set_kurs(message: Message, state: FSMContext):
+    choice = message.text
+    if choice == "1":
+        await message.answer("📝 RUB sotish kursini yuboring:", reply_markup=back)
+        await state.update_data(kurs="sotish_rub")
+    elif choice == "2":
+        await message.answer("📝 USD sotish kursini yuboring:", reply_markup=back)
+        await state.update_data(kurs="sotish_usd")
+    elif choice == "3":
+        await message.answer("📝 RUB sotib olish kursini yuboring:", reply_markup=back)
+        await state.update_data(kurs="sotib_rub")
+    elif choice == "4":
+        await message.answer("📝 USD sotib olish kursini yuboring:", reply_markup=back)
+        await state.update_data(kurs="sotib_usd")
+    else:
+        await message.answer("❌ 1-4 oralig‘ida raqam kiriting!")
+        return
+    await state.set_state(Form.set_kurs_value)
+
+@dp.message(Form.set_kurs_value)
+async def set_kurs_value(message: Message, state: FSMContext):
+    data = await state.get_data()
+    kurs_type = data["kurs"]
+    if message.text.replace(".", "").isdigit():
+        write_file(f"tizim/kurs/{kurs_type}.txt", message.text)
+        await message.answer("✅ Kurs o‘zgartirildi!", reply_markup=asosiy)
+    else:
+        await message.answer("❌ Faqat raqam kiriting!")
+    await state.clear()
+
+@dp.message(Form.set_support)
+async def set_support(message: Message, state: FSMContext):
+    write_file("tizim/support.txt", message.text)
+    await message.answer("✅ Aloqa matni o‘zgartirildi!", reply_markup=asosiy)
+    await state.clear()
+
+@dp.message(Form.add_channel)
+async def add_channel(message: Message, state: FSMContext):
+    text = message.text
+    if "-" in text:
+        kanal = read_file("tizim/kanal.txt") or ""
+        if kanal:
+            write_file("tizim/kanal.txt", f"{kanal}\n{text}")
+        else:
+            write_file("tizim/kanal.txt", text)
+        await message.answer("✅ Kanal qo‘shildi!", reply_markup=asosiy)
+    else:
+        await message.answer("❌ Format: Kanal nomi-Kanal_useri", reply_markup=back)
+    await state.clear()
+
+@dp.message(Form.set_promo)
+async def set_promo(message: Message, state: FSMContext):
+    username = message.text.strip()
+    if username.startswith("@"):
+        username = username[1:]
+    write_file("tizim/promo.txt", f"@{username}")
+    await message.answer(f"✅ To‘lovlar kanali @{username} qilib belgilandi!", reply_markup=asosiy)
+    await state.clear()
+
+# ============ BOT ISHGA TUSHIRISH ============
+async def main():
+    print("🚀 Aiogram bot ishga tushdi!")
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
